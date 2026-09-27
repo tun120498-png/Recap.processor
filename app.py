@@ -24,6 +24,8 @@ import streamlit as st
 APP_TITLE = "Recap Video Processor"
 CLIP_SECONDS = 120
 SPEED = 1.05
+DEFAULT_WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
+WHISPER_MODELS = ("base", "small", "tiny")
 WORK_ROOT = Path(os.environ.get("RECAP_WORK_DIR", tempfile.gettempdir())) / "recap_video_processor"
 WORK_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -198,9 +200,9 @@ def has_audio_stream(video_path: Path, log_path: Path) -> bool:
 # ---------- Whisper and SRT helpers ----------
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=1)
 def load_whisper_model(model_name: str) -> Any:
-    """Load OpenAI Whisper once per Streamlit server process."""
+    """Load one CPU Whisper model at a time so model switching cannot leak RAM."""
     try:
         import torch
         import whisper
@@ -209,6 +211,9 @@ def load_whisper_model(model_name: str) -> Any:
             "Whisper dependencies are missing. Run `pip install -r requirements.txt` and restart."
         ) from exc
 
+    # Community Cloud does not provide a CUDA runtime. Limiting intra-op
+    # parallelism also reduces peak memory and CPU contention on shared hosts.
+    torch.set_num_threads(max(1, min(2, os.cpu_count() or 1)))
     device = "cuda" if torch.cuda.is_available() else "cpu"
     return whisper.load_model(model_name, device=device)
 
@@ -708,7 +713,18 @@ def sidebar_settings() -> tuple[str | None, str, str, dict[str, Any]]:
             help="Choosing Burmese avoids language-detection mistakes when the speech is primarily Myanmar language.",
         )
         language = {"Burmese / Myanmar (recommended)": "my", "Auto-detect": None, "English": "en"}[language_label]
-        model_name = st.selectbox("Whisper model", ["large-v3", "turbo", "medium"], index=0)
+        model_name = st.selectbox(
+            "Whisper model (Community Cloud-safe)",
+            list(WHISPER_MODELS),
+            index=list(WHISPER_MODELS).index(DEFAULT_WHISPER_MODEL)
+            if DEFAULT_WHISPER_MODEL in WHISPER_MODELS
+            else 0,
+            help=(
+                "base is the default because Community Cloud has about 2.7 GB RAM. "
+                "small is more accurate but uses more memory; tiny is the fallback for very tight limits. "
+                "large-v3/turbo/medium are intentionally disabled on this deployment target."
+            ),
+        )
         aspect_preset = st.selectbox("Output frame", list(ASPECT_PRESETS), index=0)
 
         st.divider()
@@ -820,7 +836,7 @@ def main() -> None:
     with col_load:
         load_clicked = st.button("Load uploaded SRT", use_container_width=True, disabled=subtitle_upload is None)
     with col_tip:
-        st.caption("`large-v3` downloads once on first use and is the highest-accuracy default for Burmese speech.")
+        st.caption("`base` is the default multilingual model for Community Cloud; use `small` only if the app has enough memory.")
 
     # These actions occur before the editor widget is instantiated, allowing safe
     # initialization of its Streamlit state key.
@@ -924,7 +940,7 @@ def main() -> None:
             "- **Font availability:** the font must be installed on the deployment host. `Noto Sans Myanmar` is recommended for Burmese.\n"
             "- **Masking:** the solid lower-third cover band hides originals that are located in that area. Move the subtitle position or disable the band for different layouts.\n"
             "- **Audio:** custom audio is not looped. If it is shorter than the sped-up video, the remaining section is silent.\n"
-            "- **Accuracy:** `large-v3` is resource intensive; use a GPU host for practical long-video turnaround."
+            "- **Accuracy:** `base` keeps this Community Cloud deployment usable; `small` can improve Burmese accuracy but may exceed the shared memory limit. `large-v3`, `turbo`, and `medium` require a GPU-capable host."
         )
 
 
