@@ -1,6 +1,1 @@
-Line 1: --extra-index-url https://download.pytorch.org/whl/cpu
-Line 2: streamlit
-Line 3: torch==2.2.0+cpu
-Line 4: openai-whisper
-Line 5:ffmpeg-python
-Line 6: srt
+
